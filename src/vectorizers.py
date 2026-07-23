@@ -3,48 +3,11 @@ src/vectorizers.py
 Vectorizers including custom wrappers for Word2Vec and SBERT to make them sklearn-compatible.
 """
 import numpy as np
+from scipy import sparse
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 
 # 1. Dynamic TF-IDF (Accepts Unigrams, Bigrams, or Both)
-from sklearn.feature_extraction.text import CountVectorizer
-
-class BM25Transformer(BaseEstimator, TransformerMixin):
-    def __init__(self, k1=1.5, b=0.75):
-        self.k1 = k1
-        self.b = b
-        self.vectorizer = CountVectorizer(stop_words="english")
-        self.idf = None
-        self.avgdl = None
-
-    def fit(self, X, y=None):
-        X_counts = self.vectorizer.fit_transform(X)
-
-        n_docs = X_counts.shape[0]
-        df = np.bincount(X_counts.indices, minlength=X_counts.shape[1])
-
-        self.idf = np.log((n_docs - df + 0.5) / (df + 0.5) + 1)
-
-        doc_lengths = np.asarray(X_counts.sum(axis=1)).ravel()
-        self.avgdl = doc_lengths.mean()
-
-        return self
-
-    def transform(self, X):
-        X_counts = self.vectorizer.transform(X).astype(np.float64)
-
-        doc_lengths = np.asarray(X_counts.sum(axis=1)).ravel()
-
-        rows, cols = X_counts.nonzero()
-
-        for i, j in zip(rows, cols):
-            tf = X_counts[i, j]
-            denom = tf + self.k1 * (
-                1 - self.b + self.b * doc_lengths[i] / self.avgdl
-            )
-            X_counts[i, j] = self.idf[j] * (tf * (self.k1 + 1)) / denom
-
-        return X_counts
 
 def get_tfidf(ngram_range=(1, 2)):
     """
@@ -117,14 +80,102 @@ class SBertTransformer(BaseEstimator, TransformerMixin):
 def get_sbert():
     return SBertTransformer()
 
-def get_bm25():
-    return BM25Transformer()
+# 4. BM25 Transformer
+class BM25Transformer(BaseEstimator, TransformerMixin):
+    """
+    BM25 Transformer compatible with scikit-learn pipelines.
+    Uses CountVectorizer to compute term frequencies and applies BM25 weighting.
+    
+    Parameters
+    ----------
+    k1 : float, default=1.5
+        Term frequency saturation parameter.
+    b : float, default=0.75
+        Length normalization parameter.
+    ngram_range : tuple, default=(1, 1)
+        N-gram range for CountVectorizer.
+    max_features : int, default=20000
+        Maximum number of features.
+    min_df : int, default=2
+        Minimum document frequency.
+    stop_words : str or list, default='english'
+        Stop words to remove.
+    """
+    def __init__(self, k1=1.5, b=0.75, ngram_range=(1, 1), max_features=20000, min_df=2, stop_words='english'):
+        self.k1 = k1
+        self.b = b
+        self.ngram_range = ngram_range
+        self.max_features = max_features
+        self.min_df = min_df
+        self.stop_words = stop_words
+        self.vectorizer = None
+        self.idf_ = None
+        self.avgdl_ = None
+
+    def fit(self, X, y=None):
+        self.vectorizer = CountVectorizer(
+            ngram_range=self.ngram_range,
+            max_features=self.max_features,
+            min_df=self.min_df,
+            stop_words=self.stop_words
+        )
+        X_counts = self.vectorizer.fit_transform(X)
+        
+        # Compute document lengths
+        doc_lengths = X_counts.sum(axis=1).A1
+        self.avgdl_ = np.mean(doc_lengths)
+        
+        # Compute IDF values (BM25 uses a slightly different IDF formulation)
+        n_samples = X_counts.shape[0]
+        df = np.array((X_counts > 0).sum(axis=0)).flatten()
+        # BM25 IDF: log((N - df + 0.5) / (df + 0.5))
+        self.idf_ = np.log((n_samples - df + 0.5) / (df + 0.5) + 1)
+        
+        return self
+
+    def transform(self, X):
+        if self.vectorizer is None:
+            raise ValueError("BM25Transformer not fitted yet. Call fit() first.")
+        
+        X_counts = self.vectorizer.transform(X)
+        
+        # Get document lengths
+        doc_lengths = X_counts.sum(axis=1).A1
+        
+        # Apply BM25 formula
+        # BM25 score = IDF * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgdl)))
+        
+        # Convert to CSR for efficient row operations
+        X_csr = X_counts.tocsr()
+        
+        # Compute denominator for each non-zero element
+        # For each document, we need: tf + k1 * (1 - b + b * dl / avgdl)
+        # We can compute the length normalization factor per document
+        length_norm = self.k1 * (1 - self.b + self.b * doc_lengths / self.avgdl_)
+        
+        # Apply BM25 transformation to non-zero elements
+        data = X_csr.data
+        indices = X_csr.indices
+        indptr = X_csr.indptr
+        
+        new_data = np.zeros_like(data)
+        for i in range(X_csr.shape[0]):
+            start, end = indptr[i], indptr[i + 1]
+            tf = data[start:end]
+            term_indices = indices[start:end]
+            
+            # BM25 formula
+            idf_vals = self.idf_[term_indices]
+            denom = tf + length_norm[i]
+            new_data[start:end] = idf_vals * (tf * (self.k1 + 1)) / denom
+        
+        X_bm25 = sparse.csr_matrix((new_data, indices, indptr), shape=X_csr.shape)
+        return X_bm25
+
+    def get_feature_names_out(self, input_features=None):
+        if self.vectorizer is None:
+            raise ValueError("BM25Transformer not fitted yet. Call fit() first.")
+        return self.vectorizer.get_feature_names_out(input_features)
 
 
-def get_all_vectorizers():
-    return {
-        'tfidf': get_tfidf(),
-        'bm25': get_bm25(),
-        'word2vec': get_word2vec(),
-        'sbert': get_sbert()
-    }
+
