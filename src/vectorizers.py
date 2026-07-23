@@ -7,6 +7,45 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # 1. Dynamic TF-IDF (Accepts Unigrams, Bigrams, or Both)
+from sklearn.feature_extraction.text import CountVectorizer
+
+class BM25Transformer(BaseEstimator, TransformerMixin):
+    def __init__(self, k1=1.5, b=0.75):
+        self.k1 = k1
+        self.b = b
+        self.vectorizer = CountVectorizer(stop_words="english")
+        self.idf = None
+        self.avgdl = None
+
+    def fit(self, X, y=None):
+        X_counts = self.vectorizer.fit_transform(X)
+
+        n_docs = X_counts.shape[0]
+        df = np.bincount(X_counts.indices, minlength=X_counts.shape[1])
+
+        self.idf = np.log((n_docs - df + 0.5) / (df + 0.5) + 1)
+
+        doc_lengths = np.asarray(X_counts.sum(axis=1)).ravel()
+        self.avgdl = doc_lengths.mean()
+
+        return self
+
+    def transform(self, X):
+        X_counts = self.vectorizer.transform(X).astype(np.float64)
+
+        doc_lengths = np.asarray(X_counts.sum(axis=1)).ravel()
+
+        rows, cols = X_counts.nonzero()
+
+        for i, j in zip(rows, cols):
+            tf = X_counts[i, j]
+            denom = tf + self.k1 * (
+                1 - self.b + self.b * doc_lengths[i] / self.avgdl
+            )
+            X_counts[i, j] = self.idf[j] * (tf * (self.k1 + 1)) / denom
+
+        return X_counts
+
 def get_tfidf(ngram_range=(1, 2)):
     """
     Returns a TF-IDF vectorizer.
@@ -78,9 +117,14 @@ class SBertTransformer(BaseEstimator, TransformerMixin):
 def get_sbert():
     return SBertTransformer()
 
+def get_bm25():
+    return BM25Transformer()
+
+
 def get_all_vectorizers():
     return {
         'tfidf': get_tfidf(),
+        'bm25': get_bm25(),
         'word2vec': get_word2vec(),
         'sbert': get_sbert()
     }
