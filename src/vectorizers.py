@@ -177,5 +177,14 @@ class BM25Transformer(BaseEstimator, TransformerMixin):
             raise ValueError("BM25Transformer not fitted yet. Call fit() first.")
         return self.vectorizer.get_feature_names_out(input_features)
 
+def get_bm25():
+    return BM25Transformer()
 
 
+def get_all_vectorizers():
+    return {
+        'tfidf': get_tfidf(),
+        'word2vec': get_word2vec(),
+        'sbert': get_sbert(),
+        'bm25': get_bm25()
+    }
