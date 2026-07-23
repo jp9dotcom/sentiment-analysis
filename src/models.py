@@ -6,11 +6,16 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from xgboost import XGBClassifier
 
 def get_naive_bayes():
     """Fast baseline. Note: Only works with non-negative features (TF-IDF)."""
     return MultinomialNB(alpha=1.0)
+
+def get_linear_regression():
+    """Linear baseline for binary classification using LogisticRegression with default parameters."""
+    return LogisticRegression(random_state=42)
 
 def get_logistic_regression():
     """Strong linear baseline."""
@@ -35,11 +40,31 @@ def get_xgboost():
         random_state=42
     )
 
+def get_gradient_boosting():
+    """Gradient Boosting classifier with calibrated probability estimates."""
+    return GradientBoostingClassifier(
+        n_estimators=100,
+        learning_rate=0.1,
+        max_depth=3,
+        random_state=42
+    )
+
+def get_random_forest():
+    """Random Forest classifier with parallel processing."""
+    return RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+        n_jobs=-1
+    )
+
 def get_all_classifiers():
     """Returns a dictionary of all classifiers."""
     return {
         'naive_bayes': get_naive_bayes(),
+        'linear_regression': get_linear_regression(),
         'logistic_regression': get_logistic_regression(),
         'linearsvc': get_linearsvc(),
-        'xgboost': get_xgboost()
+        'xgboost': get_xgboost(),
+        'gradient_boosting': get_gradient_boosting(),
+        'random_forest': get_random_forest()
     }
